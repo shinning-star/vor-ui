@@ -1,0 +1,92 @@
+version: "3.1"
+services:
+  vor-ui-proxy:
+    hostname: vor-ui-proxy
+    container_name: vor-ui-proxy
+    build:
+      context: .
+      dockerfile: ./docker/nginx.Dockerfile
+    networks:
+      vorui_devnet:
+        ipv4_address: 172.25.0.3
+    ports:
+      - "5000:5000"
+  
+  vorui-postgres:
+    image: postgres
+    restart: always
+    hostname: vorui-postgres
+    container_name: vorui-postgres
+    environment:
+      - POSTGRES_USER=vorui
+      - POSTGRES_PASSWORD=vorui
+      - POSTGRES_DB=vorui
+    networks:
+      vorui_devnet:
+        ipv4_address: 172.25.0.4
+    ports:
+      - "5432:5432"
+
+  pgweb:
+    container_name: pg-ui-web
+    restart: unless-stopped
+    image: sosedoff/pgweb
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=postgres://vorui:vorui@172.25.0.4:5432/vorui?sslmode=disable
+    depends_on:
+      - vorui-postgres
+    networks:
+      vorui_devnet:
+        ipv4_address: 172.25.0.5
+
+  vor-env:
+    hostname: vor-env
+    build:
+      context: .
+      dockerfile: ./docker/vor.Dockerfile
+    container_name: vor-env
+    networks:
+      vorui_devnet:
+        ipv4_address: 172.25.0.6
+    ports:
+      - "8545:8545"
+
+  vor-ui:
+    hostname: vor-ui
+    build:
+      context: .
+      dockerfile: ./docker/ui.Dockerfile
+    container_name: vor-ui
+    command: >
+      /bin/sh -c "
+        cd /root/vor-ui
+        date > /root/vor-ui/dummy
+        until nc -z 172.25.0.6 8545; do sleep 1; echo 'wait for ganache'; done
+        until nc -z 172.25.0.4 5432; do sleep 1; echo 'wait for postgres'; done
+        npm run db:migrate
+        sleep 10
+        cd /root/vor-ui && npx truffle deploy --network=development
+        chmod +x /root/vor-ui/set_contract_address.sh && /root/vor-ui/set_contract_address.sh
+        npm run service:dev & npm run start & tail -f /root/vor-ui/dummy
+        "
+    depends_on:
+      - vorui-postgres
+      - vor-env
+    volumes:
+      - ./front:/root/vor-ui/front:ro
+      - ./service:/root/vor-ui/service:ro
+    networks:
+      vorui_devnet:
+        ipv4_address: 172.25.0.7
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+
+networks:
+  vorui_devnet:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.0.0/24
